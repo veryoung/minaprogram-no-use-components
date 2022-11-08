@@ -1,6 +1,9 @@
+/* eslint-disable no-use-before-define */
+
 const fs = require('fs')
-const { resolve } = require('path')
+const path = require('path')
 const env = process.env.BUILD_TYPE
+const replaceExt = require('replace-ext')
 
 /** 项目根目录 */
 const rootDir = '../'
@@ -23,24 +26,62 @@ const isAutoDelete = env === 'develop'
 /** 小程序页面全路径 */
 const entries = []
 
+const currentDirname = path.resolve(__dirname, '../src')
+
+/** 动态的遍历入口文件下所有子引用 */
+function _inflateEntries(entries = [], dirname, entry) {
+  const configFile = replaceExt(entry, '.json')
+  const content = fs.readFileSync(configFile, 'utf8')
+  const config = JSON.parse(content)
+
+  const { pages, usingComponents, subPackages } = config
+  pages && pages.forEach((item) => inflateEntries(entries, dirname, item))
+  usingComponents && Object.values(usingComponents).forEach((item) => inflateEntries(entries, dirname, item))
+  subPackages &&
+    subPackages.forEach((subpackage) => {
+      if (!subpackage.pages) {
+        return
+      }
+      return subpackage.pages.forEach((item) => inflateEntries(entries, dirname + `/${subpackage.root}`, item))
+    })
+}
+
+function inflateEntries(entries, dirname, entry) {
+  if (/plugin:\/\//.test(entry)) {
+    console.log(`发现插件 ${entry}`)
+    return
+  }
+
+  if (typeof entry !== 'string') {
+    throw new Error('入口文件位置获取有误')
+  }
+
+  entry = path.resolve(dirname, entry)
+  if (entry != null && !entries.includes(entry)) {
+    entries.push(entry)
+    _inflateEntries(entries, path.dirname(entry), entry)
+  }
+}
+
 Object.keys(entry).forEach((i) => {
   if (i === 'pages') {
     entry[i] &&
       entry[i].length > 0 &&
       entry[i].forEach((j) => {
-        entries.push(`${j}`)
+        inflateEntries(entries, currentDirname, j)
       })
   }
   if (i === 'subPackages') {
     entry[i].forEach((j) => {
       if (j && j.pages && j.pages.length > 0) {
         j.pages.forEach((k) => {
-          entries.push(`${j.root}/${k}`)
+          inflateEntries(entries, currentDirname, `${j.root}/${k}`)
         })
       }
     })
   }
 })
+
 
 /**
  * 查找当前页面内未使用的组件并记录
@@ -74,8 +115,8 @@ const findNoUseComponents = (i, json, wxml) => {
 }
 
 entries.forEach((i) => {
-  const jsonFile = resolve(__dirname, `${rootDir}src`, `${i}.json`)
-  const xmlFile = resolve(__dirname, `${rootDir}src`, `${i}.wxml`)
+  const jsonFile = path.resolve(`${i}.json`)
+  const xmlFile = path.resolve(`${i}.wxml`)
   const jsonContent = fs.readFileSync(jsonFile, 'utf8')
   const wxmlInfo = fs.readFileSync(xmlFile, 'utf8')
   const jsonInfo = JSON.parse(jsonContent, 'utf8')
@@ -90,7 +131,7 @@ if (showLog) {
 
 if (isAutoDelete) {
   Object.keys(noUseTagPagesMap).forEach((i) => {
-    const filePath = resolve(__dirname, `${rootDir}src`, `${i}.json`)
+    const filePath = path.resolve(`${i}.json`)
     const fileContent = fs.readFileSync(filePath)
     const json = JSON.parse(fileContent, 'utf8')
     const { usingComponents } = json
